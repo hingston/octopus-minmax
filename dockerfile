@@ -15,8 +15,8 @@ RUN python -m venv .venv && \
     pip install --no-cache-dir -r requirements.txt && \
     pip install playwright==1.50.0
 
-# Download only Chrome for Playwright
-RUN . .venv/bin/activate && playwright install chrome --with-deps
+# Install Playwright
+RUN . .venv/bin/activate && playwright install --with-deps
 
 #--- Final Image ---
 FROM python:3.12-slim-bookworm

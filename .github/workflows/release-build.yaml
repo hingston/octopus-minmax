@@ -39,8 +39,9 @@ jobs:
         with:
           images: ${{ vars.DOCKER_IMAGE }}
           tags: |
-            type=ref,event=release,pattern=latest,suffix=-${{ github.sha }}
-            type=semver,pattern={{version}}
+            ${{ github.event_name == 'release' }}: type=ref,event=release,pattern=latest,suffix=-${{ github.sha }}
+            ${{ github.event_name == 'release' }}: type=semver,pattern={{version}}
+            ${{ github.event_name == 'pull_request' }}: type=sha,prefix=pr-
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5

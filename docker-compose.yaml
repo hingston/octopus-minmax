@@ -12,6 +12,8 @@ services:
       - OCTOPUS_LOGIN_PASSWD=<your_password>
       - EXECUTION_TIME=23:00
       - DISCORD_WEBHOOK=<your_webhook_url>
+      - TELEGRAM_BOT_TOKEN=<your_telegram_bot_token>
+      - TELEGRAM_CHAT_ID=<your_telegram_chat>
       - ONE_OFF=false
       - DRY_RUN=false
       - PYTHONUNBUFFERED=1

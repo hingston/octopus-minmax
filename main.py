@@ -98,14 +98,29 @@ enrolment_query = """query {{
 }}"""
 
 
-def send_discord_message(content):
-    print(content)
-    if config.DISCORD_WEBHOOK is not None:
-        content = f"`{content}`"
-        data = {
-            "content": content
-        }
-        requests.post(config.DISCORD_WEBHOOK, json=data)
+def send_message(content):
+    """
+    Sends a message to Discord and/or Telegram based on the config.py file if those variables are set.
+    """
+    print(content)  # Log the message regardless of where it's sent
+
+    if hasattr(config, 'DISCORD_WEBHOOK') and config.DISCORD_WEBHOOK:
+        content_discord = f"`{content}`"
+        data = {"content": content_discord}
+        try:
+            response = requests.post(config.DISCORD_WEBHOOK, json=data)
+            response.raise_for_status()  # Raise HTTPError for bad responses
+        except requests.exceptions.RequestException as e:
+            print(f"Error sending Discord message: {e}")
+
+    if hasattr(config, 'TELEGRAM_BOT_TOKEN') and config.TELEGRAM_BOT_TOKEN and hasattr(config, 'TELEGRAM_CHAT_ID') and config.TELEGRAM_CHAT_ID:
+        url = f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}/sendMessage"
+        data = {"chat_id": config.TELEGRAM_CHAT_ID, "text": content}
+        try:
+            response = requests.post(url, data=data)
+            response.raise_for_status()  # Raise HTTPError for bad responses
+        except requests.exceptions.RequestException as e:
+            print(f"Error sending Telegram message: {e}")
 
 
 def accept_new_agreement():
@@ -123,7 +138,7 @@ def accept_new_agreement():
                     last_step_date = datetime.fromisoformat(
                         stage['steps'][-1]['updatedAt'].replace('Z', '+00:00')).date()
                     if last_step_date == today and stage['status'] == 'COMPLETED':
-                        send_discord_message("Post-enrolment automatically completed with today's date.")
+                        send_message("Post-enrolment automatically completed with today's date.")
                         return
 
         raise Exception("ERROR: No completed post-enrolment found today and no in-progress enrolment.")
@@ -280,7 +295,7 @@ def setup_gql(token):
 def compare_and_switch():
     welcome_message = "DRY RUN: " if config.DRY_RUN else ""
     welcome_message += "Octobot on. Starting comparison of today's costs..."
-    send_discord_message(welcome_message)
+    send_message(welcome_message)
 
     (curr_tariff, curr_stdn_charge, region_code, consumption) = get_acc_info()
     total_curr_cost = sum(float(entry['costDeltaWithTax']) for entry in consumption) + curr_stdn_charge
@@ -295,26 +310,26 @@ def compare_and_switch():
     # 2p buffer because cba
     if (total_potential_calculated + 2) < total_curr_cost:
         switch_message = "{summary}\nInitiating Switch to {new_tariff}".format(summary=summary, new_tariff=opposite_tariff[curr_tariff])
-        send_discord_message(switch_message)
+        send_message(switch_message)
 
         if config.DRY_RUN:
             dry_run_message ="DRY RUN: Not going through with switch today."
-            send_discord_message(dry_run_message)
+            send_message(dry_run_message)
             return None
         
         switch_tariff(opposite_tariff[curr_tariff])
-        send_discord_message("Tariff switch requested successfully.")
+        send_message("Tariff switch requested successfully.")
         # Give octopus some time to generate the agreement
         time.sleep(60)
         accept_new_agreement()
-        send_discord_message("Accepted agreement. Switch successful.")
+        send_message("Accepted agreement. Switch successful.")
 
         if verify_new_agreement():
-            send_discord_message("Verified new agreement successfully. Process finished.")
+            send_message("Verified new agreement successfully. Process finished.")
         else:
-            send_discord_message("Unable to accept new agreement. Please check your emails.")
+            send_message("Unable to accept new agreement. Please check your emails.")
     else:
-        send_discord_message("Not switching today. " + summary)
+        send_message("Not switching today. " + summary)
 
 
 def run_tariff_compare():
@@ -325,4 +340,4 @@ def run_tariff_compare():
         else:
             raise Exception("ERROR: setup_gql has failed")
     except Exception:
-        send_discord_message(traceback.format_exc())
+        send_message(traceback.format_exc())

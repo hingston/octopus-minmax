@@ -46,12 +46,14 @@ docker run -d \
 or use the docker-compose.yaml **Don't forget to add your environment variables**
 
 #### Environment Variables
-| Variable               | Description                                                                                       |
-|------------------------|---------------------------------------------------------------------------------------------------|
-| `ACC_NUMBER`           | Your Octopus Energy account number.                                                               |
-| `API_KEY`              | API token for accessing your Octopus Energy account.                                              |
-| `OCTOPUS_LOGIN_EMAIL`  | The email associated with your Octopus Energy account.                                            |
-| `OCTOPUS_LOGIN_PASSWD` | The password for your Octopus Energy account.                                                     |
-| `EXECUTION_TIME`       | (Optional) The time (HH:MM) when the script should execute. Default is `23:00` (11 PM).           |
-| `DISCORD_WEBHOOK`      | (Optional) A Discord webhook URL for sending logs and updates.                                    |
-| `ONE_OFF`              | (Optional) A flag for you to simply trigger an immediate execution instead of starting scheduling |
+| Variable               | Description                                                                                                                                                                               |
+|------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `ACC_NUMBER`           | Your Octopus Energy account number.                                                                                                                                                       |
+| `API_KEY`              | API token for accessing your Octopus Energy account.                                                                                                                                      |
+| `OCTOPUS_LOGIN_EMAIL`  | The email associated with your Octopus Energy account.                                                                                                                                    |
+| `OCTOPUS_LOGIN_PASSWD` | The password for your Octopus Energy account.                                                                                                                                             |
+| `EXECUTION_TIME`       | (Optional) The time (HH:MM) when the script should execute. Default is `23:00` (11 PM).                                                                                                   |
+| `DISCORD_WEBHOOK`      | (Optional) A Discord webhook URL for sending logs and updates.                                                                                                                            |
+| `TELEGRAM_BOT_TOKEN`   | (Optional) The Telegram Bot token. Create a bot via [BotFather](https://core.telegram.org/bots#6-botfather)                                                                               |
+| `TELEGRAM_CHAT_ID`     | (Optional) The Telegram Chat ID. You can obtain the chat ID using the method mentioned in [this guide](https://stackoverflow.com/questions/32423837/telegram-bot-how-to-get-the-chat-id). |
+| `ONE_OFF`              | (Optional) A flag for you to simply trigger an immediate execution instead of starting scheduling                                                                                         |

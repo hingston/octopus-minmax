@@ -30,9 +30,6 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-        with:
-          driver: docker-container
-          driver-opts: image=tonistiigi/binfmt:latest # Necessary to run on ARM64
 
       - name: Extract metadata (Tags, Labels) for Docker Build
         id: meta

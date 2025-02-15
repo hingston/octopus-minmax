@@ -36,9 +36,9 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ vars.DOCKER_IMAGE }}
-          tags: |
-            ${{ env.DOCKER_IMAGE }}:latest
-            ${{ env.DOCKER_IMAGE }}:${{ github.event.release.tag_name }}
+#          tags: |
+#            ${{ env.DOCKER_IMAGE }}:latest
+#            ${{ env.DOCKER_IMAGE }}:${{ github.event.release.tag_name }}
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5

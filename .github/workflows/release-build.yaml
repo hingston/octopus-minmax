@@ -35,7 +35,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ vars.DOCKER_IMAGE }}
+          images: ${{ secrets.DOCKER_USERNAME }}/octopus-minmax
 #          tags: |
 #            ${{ env.DOCKER_IMAGE }}:latest
 #            ${{ env.DOCKER_IMAGE }}:${{ github.event.release.tag_name }}

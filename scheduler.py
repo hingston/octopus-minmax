@@ -24,7 +24,6 @@ else:
         )
         sentry_sdk.set_user({"id": config.ACC_NUMBER, "account_number": config.ACC_NUMBER})
         send_notification(message=f"Sentry initialized.")
-
     send_notification(message=f"Welcome to Octopus MinMax Bot. I will run your comparisons at {config.EXECUTION_TIME}")
 
     while True:
@@ -34,10 +33,6 @@ else:
 
         if current_time == config.EXECUTION_TIME and last_execution_date != current_date:
             last_execution_date = current_date
-            # 10 Sec - 10 Min Random Delay to prevent all users attempting to access API at same time
-            delay = random.randint(10,600)
-            send_notification(message=f"Octobot {config.BOT_VERSION} on. Initiating comparison in {delay/60:.1f} minutes")
-            delay = time.sleep(delay)
             run_tariff_compare()
 
         time.sleep(30) # Check time every 30 seconds

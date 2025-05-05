@@ -19,6 +19,15 @@ gql_client: Client
 tariffs = []
 
 
+USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"
+
+COMMON_HEADERS = {
+    'User-Agent': USER_AGENT,
+    'Accept': 'application/json, text/plain, */*',
+    'Accept-Language': 'en-US,en;q=0.9',
+}
+
+
 def send_notification(message, title="", error=False):
     """Sends a notification using Apprise.
 
@@ -56,7 +65,7 @@ def accept_new_agreement(product_code, enrolment_id):
     # get terms and conditions version
     version = get_terms_version(product_code)
     # accept terms and conditions
-    query = gql(accept_terms_query.format(account_number=config.ACC_NUMBER, 
+    query = gql(accept_terms_query.format(account_number=config.ACC_NUMBER,
                                           enrolment_id=enrolment_id,
                                           version_major=version['major'],
                                           version_minor=version['minor']))
@@ -75,22 +84,22 @@ def get_acc_info() -> AccountInfo:
         if meter_point.get("direction") == "IMPORT":
             import_agreement = agreement
             break
-    
+
     if not import_agreement:
         raise Exception("ERROR: No IMPORT meter point found in account data")
 
     tariff = import_agreement.get("tariff")
     if not tariff:
         raise Exception("ERROR: No tariff information found for the IMPORT meter")
-    
+
     tariff_code = tariff.get("tariffCode")
     if not tariff_code:
         raise Exception("ERROR: No tariff code found for the IMPORT  tariff")
-    
+
     curr_stdn_charge = tariff.get("standingCharge")
     if not curr_stdn_charge:
         raise Exception("ERROR: No standing charge found for the IMPORT meter tariff")
-    
+
     region_code = tariff_code[-1]
     mpan = import_agreement.get("meterPoint", {}).get("mpan")
     if not mpan:
@@ -105,10 +114,10 @@ def get_acc_info() -> AccountInfo:
                 break
         if device_id:
             break
-    
+
     if not device_id:
         raise Exception("ERROR: No device ID found for the IMPORT meter")
-    
+
     matching_tariff = next((tariff for tariff in tariffs if tariff.is_tariff(tariff_code)), None)
     if matching_tariff is None:
         raise Exception(f"ERROR: Found no supported tariff for {tariff_code}")
@@ -178,7 +187,7 @@ def get_potential_tariff_rates(tariff, region_code):
 
 
 def rest_query(url):
-    response = requests.get(url)
+    response = requests.get(url, headers=COMMON_HEADERS)
     if response.ok:
         data = response.json()
         return data
@@ -211,8 +220,11 @@ def calculate_potential_costs(consumption_data, rate_data):
 
 
 def get_token():
-    transport = AIOHTTPTransport(url=f"{config.BASE_URL}/graphql/")
-    client = Client(transport=transport, fetch_schema_from_transport=True)
+    transport = AIOHTTPTransport(
+        url=f"{config.BASE_URL}/graphql/",
+        headers=COMMON_HEADERS
+    )
+    client = Client(transport=transport, fetch_schema_from_transport=False)
     query = gql(token_query.format(api_key=config.API_KEY))
     result = client.execute(query)
     return result['obtainKrakenToken']['token']
@@ -230,8 +242,8 @@ def verify_new_agreement():
     result = gql_client.execute(query)
     today = datetime.now().date()
     valid_from = next((datetime.fromisoformat(agreement['validFrom']).date()
-                      for agreement in result['account']['electricityAgreements']
-                      if 'validFrom' in agreement),None)
+                       for agreement in result['account']['electricityAgreements']
+                       if 'validFrom' in agreement),None)
 
     # For some reason, sometimes the agreement has no end date, so I'm not sure if this bit is still relevant?
     # valid_to = datetime.fromisoformat(result['account']['electricityAgreements'][0]['validTo']).date()
@@ -241,7 +253,13 @@ def verify_new_agreement():
 
 def setup_gql(token):
     global gql_transport, gql_client
-    gql_transport = AIOHTTPTransport(url=f"{config.BASE_URL}/graphql/", headers={'Authorization': f'{token}'})
+    gql_headers = COMMON_HEADERS.copy()
+    gql_headers['Authorization'] = f'{token}'
+
+    gql_transport = AIOHTTPTransport(
+        url=f"{config.BASE_URL}/graphql/",
+        headers=gql_headers
+    )
     gql_client = Client(transport=gql_transport, fetch_schema_from_transport=True)
 
 
@@ -300,90 +318,122 @@ def compare_and_switch():
 
     # Find the cheapest tariffs that is in the list and switchable
     curr_cost = costs.get(current_tariff, float('inf'))
+
+    if not switchable_tariffs:
+        send_notification(f"{summary}\nNo switchable alternative tariffs found or calculated.")
+        return
+
     cheapest_tariff = min(switchable_tariffs, key=switchable_tariffs.get)
     cheapest_cost = costs[cheapest_tariff]
 
     if cheapest_tariff == current_tariff:
         send_notification(
-            f"{summary}\nYou are already on the cheapest tariff: {cheapest_tariff.display_name} at £{cheapest_cost / 100:.2f}")
+            f"{summary}\nYou are already on the cheapest switchable tariff: {cheapest_tariff.display_name} at £{cheapest_cost / 100:.2f}")
         return
 
     savings = curr_cost - cheapest_cost
 
     # 2p buffer because cba
     if savings > 2:
-        switch_message = f"{summary}\nInitiating Switch to {cheapest_tariff.display_name}"
-        send_notification(switch_message)
+        switch_message = f"{summary}\nCheapest switchable tariff is {cheapest_tariff.display_name} (£{cheapest_cost / 100:.2f}), saving £{savings / 100:.2f} over current (£{curr_cost / 100:.2f})."
 
         if config.DRY_RUN:
-            dry_run_message = "DRY RUN: Not going through with switch today."
+            dry_run_message = f"{switch_message}\nDRY RUN: Would initiate switch to {cheapest_tariff.display_name}. No action taken."
             send_notification(dry_run_message)
             return None
+        else:
+            send_notification(f"{switch_message}\nInitiating Switch to {cheapest_tariff.display_name}...")
+
 
         if cheapest_tariff.product_code is None:
-            send_notification("ERROR: product_code is missing.")
-            return 
-        
-        if account_info.mpan is None:
-            send_notification("ERROR: mpan is missing.")
-            return  
-        
-        enrolment_id = switch_tariff(cheapest_tariff.product_code, account_info.mpan)
-        if enrolment_id is None:
-            send_notification("ERROR: couldn't get enrolment ID")
+            send_notification(f"ERROR: product_code is missing for tariff {cheapest_tariff.display_name}. Cannot switch.")
             return
-        else:
-            send_notification("Tariff switch requested successfully.")
-        # Give octopus some time to generate the agreement
-        time.sleep(60)
-        accepted_version = accept_new_agreement(cheapest_tariff.product_code, enrolment_id)
-        send_notification("Accepted agreement (v.{version}). Switch successful.".format(version=accepted_version))
 
-        verified = verify_new_agreement()
-        if not verified:
-            send_notification("Verification failed, waiting 20 seconds and trying again...")
-            time.sleep(20)
-            verified = verify_new_agreement()  # Retry
-            
-            if verified:
-                send_notification("Verified new agreement successfully. Process finished.")
+        if account_info.mpan is None:
+            send_notification("ERROR: mpan is missing from account info. Cannot switch.")
+            return
+
+        try:
+            enrolment_id = switch_tariff(cheapest_tariff.product_code, account_info.mpan)
+            if enrolment_id is None:
+                send_notification("ERROR: Tariff switch request failed (no enrolment ID returned).")
+                return
             else:
-                send_notification(f"Unable to verify new agreement after retry. Please check your account and emails.\n" \
-                 f"https://octopus.energy/dashboard/new/accounts/{config.ACC_NUMBER}/messages")
+                send_notification(f"Tariff switch requested successfully. Enrolment ID: {enrolment_id}")
+
+            send_notification("Waiting 60 seconds for agreement generation...")
+            time.sleep(60)
+            accepted_version = accept_new_agreement(cheapest_tariff.product_code, enrolment_id)
+            send_notification(f"Accepted agreement (v.{accepted_version}). Switch successful.")
+
+            verified = verify_new_agreement()
+            if not verified:
+                send_notification("Verification failed, waiting 20 seconds and trying again...")
+                time.sleep(20)
+                verified = verify_new_agreement()  # Retry
+
+                if verified:
+                    send_notification("Verified new agreement successfully after retry. Process finished.")
+                else:
+                    send_notification(f"Unable to verify new agreement after retry. Please check your account and emails.\n" \
+                                      f"https://octopus.energy/dashboard/new/accounts/{config.ACC_NUMBER}/messages")
+            else:
+                send_notification("Verified new agreement successfully. Process finished.")
+
+        except Exception as e:
+            error_message = traceback.format_exc()
+            send_notification(f"ERROR during switch/acceptance process for {cheapest_tariff.display_name}: {error_message}", title="Octobot Switch Error", error=True)
+            capture_exception(e)
+
     else:
-        send_notification(f"{summary}\nNot switching today.")
+        send_notification(f"{summary}\nCheapest switchable tariff {cheapest_tariff.display_name} (£{cheapest_cost / 100:.2f}) does not offer significant savings (£{savings / 100:.2f}) over current (£{curr_cost / 100:.2f}). Not switching today.")
 
 
 def load_tariffs_from_ids(tariff_ids: str):
     global tariffs
 
     # Convert the input string into a set of lowercase tariff IDs
-    requested_ids = set(tariff_ids.lower().split(","))
+    requested_ids = set(tid.strip().lower() for tid in tariff_ids.split(","))
 
     # Get all predefined tariffs from the Tariffs class
     all_tariffs = TARIFFS
 
     # Match requested tariffs to predefined ones
     matched_tariffs = []
-    for tariff_id in requested_ids:
-        matched = next((t for t in all_tariffs if t.id == tariff_id), None)
+    unmatched_ids = requested_ids.copy()
 
-        if matched is not None:
-            matched_tariffs.append(matched)
-        else:
-            send_notification(f"Warning: No tariff found for ID '{tariff_id}'")
+    for t in all_tariffs:
+        if t.id.lower() in requested_ids:
+            matched_tariffs.append(t)
+            unmatched_ids.discard(t.id.lower())
+
+
+    if unmatched_ids:
+        send_notification(f"Warning: No predefined tariff found for ID(s): {', '.join(unmatched_ids)}")
+
+    if not matched_tariffs:
+        send_notification("Error: No valid tariffs loaded. Check config.TARIFFS")
 
     tariffs = matched_tariffs
 
 
 def run_tariff_compare():
     try:
-        setup_gql(get_token())
+        auth_token = get_token()
+        setup_gql(auth_token)
+
         load_tariffs_from_ids(config.TARIFFS)
+
+        if not tariffs:
+            print("No tariffs loaded, exiting comparison.")
+            return
+
         if gql_transport is not None and gql_client is not None:
             compare_and_switch()
         else:
-            raise Exception("ERROR: setup_gql has failed")
-    except Exception:
-        send_notification(message=traceback.format_exc(), title="Octobot Error", error=True)
-        capture_exception()
+            raise Exception("ERROR: Main GQL client setup failed")
+
+    except Exception as e:
+        error_details = traceback.format_exc()
+        send_notification(message=error_details, title="Octobot Error", error=True)
+        capture_exception(e)

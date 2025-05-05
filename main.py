@@ -224,7 +224,11 @@ def get_token():
         url=f"{config.BASE_URL}/graphql/",
         headers=COMMON_HEADERS
     )
-    client = Client(transport=transport, fetch_schema_from_transport=False)
+    client = Client(
+        transport=transport,
+        fetch_schema_from_transport=False,
+        execute_timeout=60  # Increased timeout to 60 seconds
+    )
     query = gql(token_query.format(api_key=config.API_KEY))
     result = client.execute(query)
     return result['obtainKrakenToken']['token']
@@ -260,7 +264,11 @@ def setup_gql(token):
         url=f"{config.BASE_URL}/graphql/",
         headers=gql_headers
     )
-    gql_client = Client(transport=gql_transport, fetch_schema_from_transport=True)
+    gql_client = Client(
+        transport=gql_transport,
+        fetch_schema_from_transport=True,
+        execute_timeout=60 # Increased timeout to 60 seconds
+    )
 
 
 def compare_and_switch():

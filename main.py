@@ -1,11 +1,11 @@
 import time
 import traceback
 from datetime import date, datetime
+import json
 
 import requests
 from apprise import Apprise
-from gql import Client, gql
-from gql.transport.aiohttp import AIOHTTPTransport
+
 from sentry_sdk import capture_exception
 
 import config
@@ -13,19 +13,55 @@ from account_info import AccountInfo
 from queries import *
 from tariff import TARIFFS
 
-gql_transport: AIOHTTPTransport
-gql_client: Client
+
+gql_auth_token: str = None
 
 tariffs = []
 
 
-USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"
+USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 
 COMMON_HEADERS = {
     'User-Agent': USER_AGENT,
     'Accept': 'application/json, text/plain, */*',
     'Accept-Language': 'en-US,en;q=0.9',
+    'Content-Type': 'application/json'
 }
+
+
+def execute_graphql_query(query_string: str, variables: dict = None):
+    """Executes a GraphQL query using the requests library."""
+    global gql_auth_token
+    if not gql_auth_token:
+        raise Exception("GraphQL client not initialized or token missing.")
+
+    graphql_endpoint = f"{config.BASE_URL}/graphql/"
+    headers = COMMON_HEADERS.copy()
+    headers['Authorization'] = f'{gql_auth_token}'
+
+    payload = {
+        "query": query_string,
+        "variables": variables or {}
+    }
+
+    try:
+        response = requests.post(graphql_endpoint, headers=headers, json=payload, timeout=60)
+        response.raise_for_status()
+
+        response_json = response.json()
+
+        if 'errors' in response_json:
+            raise Exception(f"GraphQL API Error: {response_json['errors']}")
+
+
+        return response_json.get('data', {})
+
+    except requests.exceptions.RequestException as e:
+
+        raise Exception(f"Error executing GraphQL query: {e}") from e
+    except json.JSONDecodeError as e:
+
+        raise Exception(f"Error decoding GraphQL JSON response: {e}. Response text: {response.text}") from e
 
 
 def send_notification(message, title="", error=False):
@@ -53,33 +89,33 @@ def send_notification(message, title="", error=False):
 
     apprise.notify(body=message, title=title)
 
-# The version of the terms and conditions is required to accept the new tariff
+
 def get_terms_version(product_code):
-    query = gql(get_terms_version_query.format(product_code=product_code))
-    result = gql_client.execute(query)
+    query_string = get_terms_version_query.format(product_code=product_code)
+    result = execute_graphql_query(query_string)
     terms_version = result.get('termsAndConditionsForProduct', {}).get('version', "1.0").split('.')
 
     return({'major': int(terms_version[0]), 'minor': int(terms_version[1])})
 
 def accept_new_agreement(product_code, enrolment_id):
-    # get terms and conditions version
+
     version = get_terms_version(product_code)
-    # accept terms and conditions
-    query = gql(accept_terms_query.format(account_number=config.ACC_NUMBER,
-                                          enrolment_id=enrolment_id,
-                                          version_major=version['major'],
-                                          version_minor=version['minor']))
-    result = gql_client.execute(query)
+
+    query_string = accept_terms_query.format(account_number=config.ACC_NUMBER,
+                                             enrolment_id=enrolment_id,
+                                             version_major=version['major'],
+                                             version_minor=version['minor'])
+    result = execute_graphql_query(query_string)
     return result.get('acceptTermsAndConditions', {}).get('acceptedVersion', "unknown version")
 
 
 
 def get_acc_info() -> AccountInfo:
-    query = gql(account_query.format(acc_number=config.ACC_NUMBER))
-    result = gql_client.execute(query)
+    query_string_acc = account_query.format(acc_number=config.ACC_NUMBER)
+    result_acc = execute_graphql_query(query_string_acc)
 
     import_agreement = None
-    for agreement in result.get("account", {}).get("electricityAgreements", []):
+    for agreement in result_acc.get("account", {}).get("electricityAgreements", []):
         meter_point = agreement.get("meterPoint", {})
         if meter_point.get("direction") == "IMPORT":
             import_agreement = agreement
@@ -122,11 +158,11 @@ def get_acc_info() -> AccountInfo:
     if matching_tariff is None:
         raise Exception(f"ERROR: Found no supported tariff for {tariff_code}")
 
-    # Get consumption for today
-    result = gql_client.execute(
-        gql(consumption_query.format(device_id=device_id, start_date=f"{date.today()}T00:00:00Z",
-                                     end_date=f"{date.today()}T23:59:59Z")))
-    consumption = result['smartMeterTelemetry']
+
+    query_string_con = consumption_query.format(device_id=device_id, start_date=f"{date.today()}T00:00:00Z",
+                                                end_date=f"{date.today()}T23:59:59Z")
+    result_con = execute_graphql_query(query_string_con)
+    consumption = result_con.get('smartMeterTelemetry', [])
 
     return AccountInfo(matching_tariff, curr_stdn_charge, region_code, consumption, mpan)
 
@@ -144,7 +180,7 @@ def get_potential_tariff_rates(tariff, region_code):
     if product_code is None:
         raise ValueError(f"No matching tariff found for {tariff}")
 
-    # Use the self links to navigate to the tariff details
+
     product_link = next((
         item.get('href') for item in product.get('links', [])
         if item.get('rel', '').lower() == 'self'
@@ -155,7 +191,7 @@ def get_potential_tariff_rates(tariff, region_code):
 
     tariff_details = rest_query(product_link)
 
-    # Get the standing charge including VAT
+
     region_code_key = f'_{region_code}'
     filtered_region = tariff_details.get('single_register_electricity_tariffs', {}).get(region_code_key)
 
@@ -168,7 +204,7 @@ def get_potential_tariff_rates(tariff, region_code):
     if standing_charge_inc_vat is None:
         raise ValueError(f"Standing charge including VAT not found for region {region_code_key}.")
 
-    # Find the link for standard unit rates
+
     region_links = region_tariffs.get('links', [])
     unit_rates_link = next((
         item.get('href') for item in region_links
@@ -178,7 +214,7 @@ def get_potential_tariff_rates(tariff, region_code):
     if not unit_rates_link:
         raise ValueError(f"Standard unit rates link not found for region: {region_code_key}")
 
-    # Get today's rates
+
     today = date.today()
     unit_rates_link_with_time = f"{unit_rates_link}?period_from={today}T00:00:00Z&period_to={today}T23:59:59Z"
     unit_rates = rest_query(unit_rates_link_with_time)
@@ -187,23 +223,27 @@ def get_potential_tariff_rates(tariff, region_code):
 
 
 def rest_query(url):
-    response = requests.get(url, headers=COMMON_HEADERS)
+
+    response = requests.get(url, headers=COMMON_HEADERS, timeout=60)
     if response.ok:
         data = response.json()
         return data
     else:
-        raise Exception(f"ERROR: rest_query failed querying `{url}` with {response.status_code}")
+
+        raise Exception(f"ERROR: rest_query failed querying `{url}` with status {response.status_code}. Response: {response.text}")
 
 
 def calculate_potential_costs(consumption_data, rate_data):
     period_costs = []
+    if not consumption_data:
+        return []
     for consumption in consumption_data:
         read_time = consumption['readAt'].replace('+00:00', 'Z')
         matching_rate = next(
             rate for rate in rate_data
-            # Flexible has no end time, so default to the end of time
+
             if rate['valid_from'] <= read_time <= (rate.get('valid_to') or "9999-12-31T23:59:59Z")
-            # DIRECT_DEBIT is for flexible that has different price for direct debit or not
+
             and rate['payment_method'] in [None, "DIRECT_DEBIT"]
         )
 
@@ -220,55 +260,54 @@ def calculate_potential_costs(consumption_data, rate_data):
 
 
 def get_token():
-    transport = AIOHTTPTransport(
-        url=f"{config.BASE_URL}/graphql/",
-        headers=COMMON_HEADERS
-    )
-    client = Client(
-        transport=transport,
-        fetch_schema_from_transport=False,
-        execute_timeout=60  # Increased timeout to 60 seconds
-    )
-    query = gql(token_query.format(api_key=config.API_KEY))
-    result = client.execute(query)
-    return result['obtainKrakenToken']['token']
+
+    graphql_endpoint = f"{config.BASE_URL}/graphql/"
+    query_string = token_query.format(api_key=config.API_KEY)
+    payload = {"query": query_string, "variables": {}}
+
+    try:
+
+        response = requests.post(graphql_endpoint, headers=COMMON_HEADERS, json=payload, timeout=60)
+        response.raise_for_status()
+        response_json = response.json()
+
+        if 'errors' in response_json:
+            raise Exception(f"GraphQL API Error getting token: {response_json['errors']}")
+
+        token_data = response_json.get('data', {}).get('obtainKrakenToken', {})
+        if not token_data or 'token' not in token_data:
+            raise Exception("Could not obtain KrakenToken from API response.")
+
+        return token_data['token']
+
+    except requests.exceptions.RequestException as e:
+        raise Exception(f"Error getting token: {e}") from e
+    except json.JSONDecodeError as e:
+        raise Exception(f"Error decoding token JSON response: {e}. Response text: {response.text}") from e
 
 
 def switch_tariff(target_product_code, mpan):
     change_date = date.today()
-    query = gql(switch_query.format(account_number=config.ACC_NUMBER, mpan=mpan, product_code=target_product_code, change_date=change_date))
-    result = gql_client.execute(query)
+    query_string = switch_query.format(account_number=config.ACC_NUMBER, mpan=mpan, product_code=target_product_code, change_date=change_date)
+    result = execute_graphql_query(query_string)
     return result.get("startOnboardingProcess", {}).get("productEnrolment", {}).get("id")
 
 
 def verify_new_agreement():
-    query = gql(account_query.format(acc_number=config.ACC_NUMBER))
-    result = gql_client.execute(query)
+    query_string = account_query.format(acc_number=config.ACC_NUMBER)
+    result = execute_graphql_query(query_string)
     today = datetime.now().date()
     valid_from = next((datetime.fromisoformat(agreement['validFrom']).date()
-                       for agreement in result['account']['electricityAgreements']
+                       for agreement in result.get('account', {}).get('electricityAgreements', [])
                        if 'validFrom' in agreement),None)
 
-    # For some reason, sometimes the agreement has no end date, so I'm not sure if this bit is still relevant?
-    # valid_to = datetime.fromisoformat(result['account']['electricityAgreements'][0]['validTo']).date()
-    # next_year = valid_from.replace(year=valid_from.year + 1)
+
     return valid_from == today
 
 
 def setup_gql(token):
-    global gql_transport, gql_client
-    gql_headers = COMMON_HEADERS.copy()
-    gql_headers['Authorization'] = f'{token}'
-
-    gql_transport = AIOHTTPTransport(
-        url=f"{config.BASE_URL}/graphql/",
-        headers=gql_headers
-    )
-    gql_client = Client(
-        transport=gql_transport,
-        fetch_schema_from_transport=True,
-        execute_timeout=60 # Increased timeout to 60 seconds
-    )
+    global gql_auth_token
+    gql_auth_token = token
 
 
 def compare_and_switch():
@@ -279,28 +318,27 @@ def compare_and_switch():
     account_info = get_acc_info()
     current_tariff = account_info.current_tariff
 
-    # Total consumption cost
+
     total_con_cost = sum(float(entry['costDeltaWithTax'] or 0) for entry in account_info.consumption)
     total_curr_cost = total_con_cost + account_info.standing_charge
 
-    # Total consumption
-    total_wh = sum(float(consumption['consumptionDelta']) for consumption in account_info.consumption)
-    total_kwh = total_wh / 1000  # Convert watt-hours to kilowatt-hours
 
-    # Print out consumption on current tariff
+    total_wh = sum(float(consumption['consumptionDelta']) for consumption in account_info.consumption)
+    total_kwh = total_wh / 1000
+
+
     summary = f"Total Consumption today: {total_kwh:.4f} kWh\n"
     summary += f"Current tariff {current_tariff.display_name}: £{total_curr_cost / 100:.2f} " \
                f"(£{total_con_cost / 100:.2f} con + " \
                f"£{account_info.standing_charge / 100:.2f} s/c)\n"
 
-    # Track costs key: Tariff, value: total cost in pence
-    # Add current tariff
+
     costs = {current_tariff: total_curr_cost}
 
-    # Calculate costs of other tariffs
+
     for tariff in tariffs:
         if tariff == current_tariff:
-            continue  # Skip if you're already on that tariff
+            continue
 
         try:
             (potential_std_charge, potential_unit_rates, potential_product_code) = \
@@ -321,10 +359,10 @@ def compare_and_switch():
             summary += f"No cost for {tariff.display_name}\n"
             costs[tariff] = None
 
-    # Filter the dictionary to only include tariffs where the `switchable` attribute is True
+
     switchable_tariffs = {t: cost for t, cost in costs.items() if t.switchable and cost is not None}
 
-    # Find the cheapest tariffs that is in the list and switchable
+
     curr_cost = costs.get(current_tariff, float('inf'))
 
     if not switchable_tariffs:
@@ -341,7 +379,7 @@ def compare_and_switch():
 
     savings = curr_cost - cheapest_cost
 
-    # 2p buffer because cba
+
     if savings > 2:
         switch_message = f"{summary}\nCheapest switchable tariff is {cheapest_tariff.display_name} (£{cheapest_cost / 100:.2f}), saving £{savings / 100:.2f} over current (£{curr_cost / 100:.2f})."
 
@@ -378,7 +416,7 @@ def compare_and_switch():
             if not verified:
                 send_notification("Verification failed, waiting 20 seconds and trying again...")
                 time.sleep(20)
-                verified = verify_new_agreement()  # Retry
+                verified = verify_new_agreement()
 
                 if verified:
                     send_notification("Verified new agreement successfully after retry. Process finished.")
@@ -400,13 +438,13 @@ def compare_and_switch():
 def load_tariffs_from_ids(tariff_ids: str):
     global tariffs
 
-    # Convert the input string into a set of lowercase tariff IDs
+
     requested_ids = set(tid.strip().lower() for tid in tariff_ids.split(","))
 
-    # Get all predefined tariffs from the Tariffs class
+
     all_tariffs = TARIFFS
 
-    # Match requested tariffs to predefined ones
+
     matched_tariffs = []
     unmatched_ids = requested_ids.copy()
 
@@ -436,10 +474,11 @@ def run_tariff_compare():
             print("No tariffs loaded, exiting comparison.")
             return
 
-        if gql_transport is not None and gql_client is not None:
+        if gql_auth_token:
             compare_and_switch()
         else:
-            raise Exception("ERROR: Main GQL client setup failed")
+
+            raise Exception("ERROR: GraphQL authentication token missing.")
 
     except Exception as e:
         error_details = traceback.format_exc()
